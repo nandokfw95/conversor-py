@@ -1,0 +1,12 @@
+{
+  "cidade": "Vitória da Conquinta",
+  "uf": "BA",
+  "ibge": "2933307",
+  "cep": "45077010",
+  "ddd": "77",
+  "municipios": "C:\\Conversor py\\municipios.xlsx",
+  "clientes": "C:/Users/Suporte/Documents/Converter/converte/clientes/unibom/Conversão/Anteriores/clientes.xls",
+  "fornecedores": "C:/Users/Suporte/Documents/Converter/converte/clientes/unibom/Conversão/Anteriores/fornecedores.xls",
+  "run_clientes": true,
+  "run_fornecedores": true
+}
