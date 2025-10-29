@@ -32,27 +32,59 @@ def salvar_config(config: Dict[str, str]):
 
 # ---------------------- Execuções ----------------------
 
-def run_clientes(defaults: Dict[str, str], arquivos: Dict[str, str]) -> str:
-    return clientes.processar_clientes(
-        clientes_path=arquivos["clientes"],
-        municipios_csv_path=arquivos["municipios"],
-        cidade_default=defaults["cidade"],
-        uf_default=defaults["uf"],
-        ibge_default=defaults["ibge"],
-        cep_default=defaults["cep"],
-        ddd_default=defaults["ddd"],
-    )
+def run_clientes(defaults: Dict[str, str], arquivos: Dict[str, str], modo: str) -> str:
+    """
+    Executa o processamento de clientes conforme o 'modo':
+      - "cidade_para_codigo": Cidade -> IBGE
+      - "codigo_para_cidade": IBGE -> Cidade
+    """
+    if modo == "codigo_para_cidade":
+        return clientes.processar_clientes_por_codigo(
+            clientes_path=arquivos["clientes"],
+            municipios_csv_path=arquivos["municipios"],
+            cidade_default=defaults["cidade"],
+            uf_default=defaults["uf"],
+            ibge_default=defaults["ibge"],
+            cep_default=defaults["cep"],
+            ddd_default=defaults["ddd"],
+        )
+    else:
+        return clientes.processar_clientes_por_cidade(
+            clientes_path=arquivos["clientes"],
+            municipios_csv_path=arquivos["municipios"],
+            cidade_default=defaults["cidade"],
+            uf_default=defaults["uf"],
+            ibge_default=defaults["ibge"],
+            cep_default=defaults["cep"],
+            ddd_default=defaults["ddd"],
+        )
 
-def run_fornecedores(defaults: Dict[str, str], arquivos: Dict[str, str]) -> str:
-    return fornecedores.processar_fornecedores(
-        fornecedores_path=arquivos["fornecedores"],
-        municipios_path=arquivos["municipios"],
-        cidade_default=defaults["cidade"],
-        uf_default=defaults["uf"],
-        ibge_default=defaults["ibge"],
-        cep_default=defaults["cep"],
-        ddd_default=defaults["ddd"],
-    )
+def run_fornecedores(defaults: Dict[str, str], arquivos: Dict[str, str], modo: str) -> str:
+    """
+    Executa o processamento de fornecedores conforme o 'modo':
+      - "cidade_para_codigo": Cidade -> IBGE
+      - "codigo_para_cidade": IBGE -> Cidade
+    """
+    if modo == "codigo_para_cidade":
+        return fornecedores.processar_fornecedores_por_codigo(
+            fornecedores_path=arquivos["fornecedores"],
+            municipios_path=arquivos["municipios"],
+            cidade_default=defaults["cidade"],
+            uf_default=defaults["uf"],
+            ibge_default=defaults["ibge"],
+            cep_default=defaults["cep"],
+            ddd_default=defaults["ddd"],
+        )
+    else:
+        return fornecedores.processar_fornecedores_por_cidade(
+            fornecedores_path=arquivos["fornecedores"],
+            municipios_path=arquivos["municipios"],
+            cidade_default=defaults["cidade"],
+            uf_default=defaults["uf"],
+            ibge_default=defaults["ibge"],
+            cep_default=defaults["cep"],
+            ddd_default=defaults["ddd"],
+        )
 
 # ---------------------- UI ----------------------
 
@@ -77,6 +109,10 @@ def main():
     # --- Seleção de módulos ---
     var_run_clientes = tk.BooleanVar(value=cfg.get("run_clientes", True))
     var_run_fornecedores = tk.BooleanVar(value=cfg.get("run_fornecedores", False))
+
+    # --- Modos (lembrados) ---
+    var_modo_clientes = tk.StringVar(value=cfg.get("modo_clientes", "cidade_para_codigo"))
+    var_modo_fornecedores = tk.StringVar(value=cfg.get("modo_fornecedores", "cidade_para_codigo"))
 
     # --- Helpers: pickers ---
     def pick_municipios():
@@ -140,11 +176,11 @@ def main():
         resultados = []
         try:
             if var_run_clientes.get():
-                out_cli = run_clientes(defaults, arquivos)
+                out_cli = run_clientes(defaults, arquivos, var_modo_clientes.get())
                 resultados.append(f"Clientes corrigido: {out_cli}")
 
             if var_run_fornecedores.get():
-                out_forn = run_fornecedores(defaults, arquivos)
+                out_forn = run_fornecedores(defaults, arquivos, var_modo_fornecedores.get())
                 resultados.append(f"Fornecedores corrigido: {out_forn}")
 
             if resultados:
@@ -158,6 +194,8 @@ def main():
                 **arquivos,
                 "run_clientes": var_run_clientes.get(),
                 "run_fornecedores": var_run_fornecedores.get(),
+                "modo_clientes": var_modo_clientes.get(),
+                "modo_fornecedores": var_modo_fornecedores.get(),
             })
 
         except Exception as e:
@@ -201,11 +239,27 @@ def main():
     tk.Label(root, text="Arquivo CLIENTES:").grid(row=row, column=col_lbl, sticky="e", padx=PADX, pady=PADY)
     tk.Entry(root, textvariable=var_clientes, width=60).grid(row=row, column=col_inp, padx=PADX, pady=PADY)
     tk.Button(root, text="Procurar...", command=pick_clientes).grid(row=row, column=2, padx=PADX, pady=PADY); row += 1
+  
+    # Modo CLIENTES
+    tk.Label(root, text="Preencher CLIENTES usando:").grid(row=row, column=col_lbl, sticky="ne", padx=PADX, pady=PADY)
+    frame_modo_cli = tk.Frame(root)
+    frame_modo_cli.grid(row=row, column=col_inp, sticky="w", padx=PADX, pady=PADY)
+    tk.Radiobutton(frame_modo_cli, text="Cidade → IBGE (padrão)", value="cidade_para_codigo", variable=var_modo_clientes).grid(row=0, column=0, padx=(0,12))
+    tk.Radiobutton(frame_modo_cli, text="Código IBGE → Cidade", value="codigo_para_cidade", variable=var_modo_clientes).grid(row=0, column=1)
+    row += 1
 
     # Arquivo fornecedores
     tk.Label(root, text="Arquivo FORNECEDORES:").grid(row=row, column=col_lbl, sticky="e", padx=PADX, pady=PADY)
     tk.Entry(root, textvariable=var_fornecedores, width=60).grid(row=row, column=col_inp, padx=PADX, pady=PADY)
     tk.Button(root, text="Procurar...", command=pick_fornecedores).grid(row=row, column=2, padx=PADX, pady=PADY); row += 1
+
+    # Modo FORNECEDORES
+    tk.Label(root, text="Preencher FORNECEDORES usando:").grid(row=row, column=col_lbl, sticky="ne", padx=PADX, pady=PADY)
+    frame_modo_forn = tk.Frame(root)
+    frame_modo_forn.grid(row=row, column=col_inp, sticky="w", padx=PADX, pady=PADY)
+    tk.Radiobutton(frame_modo_forn, text="Cidade → IBGE (padrão)", value="cidade_para_codigo", variable=var_modo_fornecedores).grid(row=0, column=0, padx=(0,12))
+    tk.Radiobutton(frame_modo_forn, text="Código IBGE → Cidade", value="codigo_para_cidade", variable=var_modo_fornecedores).grid(row=0, column=1)
+    row += 1
 
     # Botão executar
     tk.Button(root, text="Executar correções", command=executar).grid(row=row, column=0, columnspan=3, pady=10)

@@ -1,12 +1,14 @@
 {
-  "cidade": "Vitória da Conquinta",
+  "cidade": "BARREIRAS",
   "uf": "BA",
-  "ibge": "2933307",
-  "cep": "45077010",
+  "ibge": "2903201",
+  "cep": "47807-046",
   "ddd": "77",
   "municipios": "C:\\Conversor py\\municipios.xlsx",
-  "clientes": "C:/Users/Suporte/Documents/Converter/converte/clientes/unibom/Conversão/Anteriores/clientes.xls",
-  "fornecedores": "C:/Users/Suporte/Documents/Converter/converte/clientes/unibom/Conversão/Anteriores/fornecedores.xls",
+  "clientes": "C:/Users/Public/converte/Converte 2025/converte/clientes/cemac/Conversao/clientes.xls",
+  "fornecedores": "C:/Users/Public/converte/Converte 2025/converte/clientes/cemac/Conversao/fornecedores.xls",
   "run_clientes": true,
-  "run_fornecedores": true
+  "run_fornecedores": true,
+  "modo_clientes": "cidade_para_codigo",
+  "modo_fornecedores": "cidade_para_codigo"
 }

@@ -3,7 +3,7 @@ import os
 import re
 import unicodedata
 import warnings
-from typing import Dict, List
+from typing import Dict, List, Tuple
 import pandas as pd
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -53,17 +53,10 @@ def _mask_cnpj(num14: str) -> str:
 def _mask_cep(num8: str) -> str:
     return f"{num8[0:5]}-{num8[5:8]}"
 
-def _sanitize_text(s: str) -> str:
-    # remove acentos e caracteres especiais; normaliza espaços
-    s = _strip_accents(_fix_mojibake_pt(s))
-    s = re.sub(r"[^A-Za-z0-9 ]+", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
 def _fix_mojibake_pt(s: str) -> str:
     """
-    Tenta corrigir 'mojibake' comum em PT (ex.: 'VIT¢RIA', 'JUNDIA¡').
-    Faz tentativas de reinterpretação latin1<->cp1252 e escolhe a melhor.
+    Corrige mojibake comum em PT (ex.: 'VIT¢RIA', 'JUNDIA¡').
+    Tenta latin1<->cp1252 e escolhe a melhor heurística.
     """
     if s is None:
         return ""
@@ -81,6 +74,13 @@ def _fix_mojibake_pt(s: str) -> str:
         return (letters - 2 * bad, -len(t))
 
     return max(cands, key=score)
+
+def _sanitize_text(s: str) -> str:
+    # remove acentos e caracteres especiais; normaliza espaços
+    s = _strip_accents(_fix_mojibake_pt(s))
+    s = re.sub(r"[^A-Za-z0-9 ]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 def _read_excel_any(path: str) -> pd.DataFrame:
     ext = os.path.splitext(path.lower())[1]
@@ -117,7 +117,7 @@ def _best_guess_columns(df: pd.DataFrame):
         "bairro": find_any(["bairro"]),
         "contato": find_any(["contato", "responsavel", "responsável"]),
         "fone": find_any(["fone", "telefone", "telefone1", "tel1"]),
-        # NOVO: coluna de número
+        # coluna de número
         "numero": find_any(["numero", "número", "num"]),
     }
 
@@ -126,6 +126,8 @@ def _best_guess_columns(df: pd.DataFrame):
         colmap["cidade"] = df.columns[5]  # F
     if colmap["codigo_cidade"] is None and len(df.columns) > 6:
         colmap["codigo_cidade"] = df.columns[6]  # G
+    if colmap["uf"] is None and len(df.columns) > 1:
+        colmap["uf"] = df.columns[1]  # B
 
     created = []
     for k in ["uf", "cpf_cnpj", "cep", "cidade", "codigo_cidade",
@@ -143,95 +145,40 @@ def _best_guess_columns(df: pd.DataFrame):
 
     return colmap, created
 
-def _load_municipios_any(muni_path: str) -> Dict[str, str]:
-    """
-    Carrega municípios de CSV ou Excel.
-      - Coluna D (índice 3): nome do município (para comparar)
-      - Coluna B (índice 1): código IBGE (valor a retornar para fornecedores)
-    Aceita: .csv, .xls, .xlsx, .xlsm
-    """
-    if not os.path.isfile(muni_path):
-        raise FileNotFoundError(f"Arquivo municipios não encontrado: {muni_path}")
-
-    ext = os.path.splitext(muni_path.lower())[1]
-    df = None
-    if ext in [".xls", ".xlsx", ".xlsm"]:
-        df = pd.read_excel(muni_path, header=None, dtype=str, engine="openpyxl")
-    else:
-        for sep in (",", ";"):
-            try:
-                tmp = pd.read_csv(muni_path, header=None, sep=sep, dtype=str, encoding="utf-8", engine="python")
-                if tmp.shape[1] >= 4:
-                    df = tmp
-                    break
-            except Exception:
-                continue
-
-    if df is None or df.shape[1] < 4:
-        raise ValueError("O arquivo de municípios precisa ter pelo menos colunas B e D.")
-
-    nome_col = df.iloc[:, 3].fillna("").astype(str)  # D
-    cod_col  = df.iloc[:, 1].fillna("").astype(str)  # B
-
-    mapping = {}
-    for nome, cod in zip(nome_col, cod_col):
-        key = _normalize_city_for_match(nome)
-        # IBGE: garantir somente dígitos e manter zero à esquerda
-        cod_digits = re.sub(r"\D", "", str(cod))
-        # (Opcional) padronizar com 7 dígitos
-        if cod_digits:
-            cod_digits = cod_digits.zfill(7)
-        if key and cod_digits:
-            mapping[key] = cod_digits
-    return mapping
-
 def _normalize_city_for_match(s: str) -> str:
     """
     Normaliza nome da cidade para comparação:
     - Corrige mojibake, remove acentos
-    - Converte para UPPER
+    - UPPER
     - Remove sufixos de UF: " - MG", "(MG)", ", MG"
-    - Remove caracteres não alfanuméricos (mantém espaço)
+    - Remove não alfanum (mantém espaço)
     - Normaliza espaços
     """
     if s is None:
         return ""
     t = _fix_mojibake_pt(str(s))
     t = _strip_accents(t).upper().strip()
-
-    # Remove UF no final: " - MG", "(MG)", ", MG"
-    t = re.sub(r"\s*[-,]?\s*\([A-Z]{2}\)$", "", t)         # "(MG)"
-    t = re.sub(r"\s*[-,]?\s+[A-Z]{2}$", "", t)              # " - MG" ou ", MG"
-
-    # Remove tudo que não for letra/número/espaço
+    t = re.sub(r"\s*[-,]?\s*\([A-Z]{2}\)$", "", t)   # "(MG)"
+    t = re.sub(r"\s*[-,]?\s+[A-Z]{2}$", "", t)       # " - MG" ou ", MG"
     t = re.sub(r"[^A-Z0-9 ]+", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
+
+def _normalize_city(s: str) -> str:
+    return _strip_accents(s).upper().strip()
 
 def _smart_cpf_cnpj_mask(raw: str) -> str:
     digits = _only_digits(raw)
     if len(digits) == 0:
         return ""
-
-    # CPF exato
     if len(digits) == 11:
         return _mask_cpf(digits)
-
-    # CNPJ exato
     if len(digits) == 14:
         return _mask_cnpj(digits)
-
-    # Se tiver entre 9 e 10 → completa até 11 → CPF
     if 8 < len(digits) < 11:
-        digits = digits.zfill(11)
-        return _mask_cpf(digits)
-
-    # Se tiver entre 12 e 13 → completa até 14 → CNPJ
+        return _mask_cpf(digits.zfill(11))
     if 11 < len(digits) < 14:
-        digits = digits.zfill(14)
-        return _mask_cnpj(digits)
-
-    # Se não encaixar em nada → devolve os dígitos crus
+        return _mask_cnpj(digits.zfill(14))
     return digits
 
 def _smart_cep_mask(raw: str, cep_padrao: str) -> str:
@@ -253,36 +200,21 @@ def _format_phone_with_ddd(ddd: str, local: str) -> str:
     return local
 
 def _smart_phone_mask(raw: str, ddd_default: str) -> str:
-    """
-    - 10 dígitos: (XX) XXXX-XXXX
-    - 11 dígitos: (XX) XXXXX-XXXX
-    - 8 dígitos : (YY) XXXX-XXXX
-    - 9 dígitos : (YY) XXXXX-XXXX
-    - < 7 dígitos: retorna "" (vazio)
-    Regras adicionais:
-    - Remove não dígitos; se >11, usa últimos 11.
-    """
     digits = _only_digits(raw)
     if not digits:
         return ""
-
     if len(digits) > 11:
         digits = digits[-11:]
-
     if len(digits) < 7:
-        return ""  # conforme solicitado
-
+        return ""  # decide deixar vazio se muito curto
     if len(digits) in (8, 9):
         return _format_phone_with_ddd(ddd_default, digits)
-
     if len(digits) == 10:
         ddd, local = digits[:2], digits[2:]
         return f"({ddd}) {local[:4]}-{local[4:]}"
-
     if len(digits) == 11:
         ddd, local = digits[:2], digits[2:]
         return f"({ddd}) {local[:5]}-{local[5:]}"
-
     return digits
 
 def _extract_num_from_endereco(endereco: str) -> str:
@@ -293,44 +225,147 @@ def _extract_num_from_endereco(endereco: str) -> str:
     if not endereco:
         return ""
     s = str(endereco).strip().upper()
-    # remove pontuação/espaços do fim
     s = re.sub(r"[.,;:\s]+$", "", s)
-
-    # 'SN' (sem número) no final
     if re.search(r"\bS[\/\s]*N\.?$", s):
         return "SN"
-
-    # número no final (último bloco de dígitos no fim da string)
     m = re.search(r"(\d+)$", s)
     if m:
         return m.group(1)
-
     return ""
 
-# ===================== API pública =====================
+# ===================== Municípios (autodetect) =====================
 
-def _normalize_city(s: str) -> str:
-    return _strip_accents(s).upper().strip()
+from typing import Tuple  # no topo do arquivo, se ainda não tiver
 
-def processar_fornecedores(
+def _load_municipios_auto(muni_path: str) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]]:
+    """
+    Lê CSV/Excel de municípios.
+    Preferências de colunas (com autodetecção fallback):
+      - Nome: D (índice 3) ou coluna mais 'alfabética'
+      - IBGE: B (índice 1) ou coluna com maioria 7 dígitos
+      - UF:   E (índice 4) ou coluna com maioria de siglas (2 letras)
+    Retorna 4 dicionários:
+      - name_to_code: NOME_NORMALIZADO -> IBGE
+      - code_to_name: IBGE -> Nome Title Case
+      - code_to_uf:   IBGE -> UF (ex.: 'GO')
+      - name_to_uf:   NOME_NORMALIZADO -> UF
+    """
+    if not os.path.isfile(muni_path):
+        raise FileNotFoundError(f"Arquivo municipios não encontrado: {muni_path}")
+
+    ext = os.path.splitext(muni_path.lower())[1]
+    df = None
+    if ext in [".xls", ".xlsx", ".xlsm"]:
+        df = pd.read_excel(muni_path, header=None, dtype=str, engine="openpyxl")
+    else:
+        for sep in (",", ";"):
+            try:
+                tmp = pd.read_csv(muni_path, header=None, sep=sep, dtype=str, encoding="utf-8", engine="python")
+                if tmp.shape[1] >= 2:
+                    df = tmp
+                    break
+            except Exception:
+                continue
+    if df is None:
+        raise ValueError("Não foi possível ler o arquivo de municípios.")
+
+    # Nome: tenta D(3); senão, coluna mais 'alfabética'
+    if df.shape[1] > 3:
+        nome_series = df.iloc[:, 3]
+    else:
+        scores = []
+        for i in range(min(df.shape[1], 8)):
+            col = df.iloc[:, i].fillna("").astype(str)
+            alpha = col.str.count(r"[A-Za-z]").sum()
+            digits = col.str.count(r"\d").sum()
+            scores.append((alpha - digits, i))
+        scores.sort(reverse=True)
+        nome_series = df.iloc[:, scores[0][1]]
+    nome_col = nome_series.fillna("").astype(str)
+
+    def _as_digits(s: pd.Series) -> pd.Series:
+        return s.fillna("").astype(str).map(lambda x: _only_digits(x))
+
+    # IBGE: preferir B(1); senão coluna com maioria de 7 dígitos
+    ibge_idx, ibge_hits = (1 if df.shape[1] > 1 else None), -1
+    if ibge_idx is not None:
+        col = _as_digits(df.iloc[:, ibge_idx])
+        ibge_hits = (col.str.match(r"^\d{7}$")).sum()
+
+    best_idx, best_hits = None, -1
+    for i in range(min(df.shape[1], 12)):
+        if i == nome_series.name:
+            continue
+        col = _as_digits(df.iloc[:, i])
+        hits = (col.str.match(r"^\d{7}$")).sum()
+        if hits > best_hits:
+            best_hits, best_idx = hits, i
+    if best_hits > ibge_hits:
+        ibge_idx = best_idx
+
+    if ibge_idx is None:
+        raise ValueError("Não foi possível identificar a coluna do IBGE.")
+    ibge_col = _as_digits(df.iloc[:, ibge_idx])
+
+    # UF: preferir E(4); senão coluna com maioria de siglas 2 letras
+    def _is_uf_series(s: pd.Series) -> int:
+        s = s.fillna("").astype(str).str.strip().str.upper()
+        return (s.str.match(r"^[A-Z]{2}$")).sum()
+
+    uf_idx, uf_hits = (4 if df.shape[1] > 4 else None), -1
+    if uf_idx is not None:
+        uf_hits = _is_uf_series(df.iloc[:, uf_idx])
+
+    best_uf_idx, best_uf_hits = None, -1
+    for i in range(min(df.shape[1], 12)):
+        if i in (nome_series.name, ibge_idx):
+            continue
+        hits = _is_uf_series(df.iloc[:, i])
+        if hits > best_uf_hits:
+            best_uf_hits, best_uf_idx = hits, i
+    if best_uf_hits > uf_hits:
+        uf_idx = best_uf_idx
+
+    uf_col = df.iloc[:, uf_idx].fillna("").astype(str).str.strip().str.upper() if uf_idx is not None else pd.Series([""]*len(df))
+
+    name_to_code, code_to_name, code_to_uf, name_to_uf = {}, {}, {}, {}
+    for nome, cod, uf in zip(nome_col, ibge_col, uf_col):
+        nome_norm = _normalize_city(nome)
+        cod_norm = cod.strip()
+        uf_norm  = (uf or "").strip().upper()
+        if nome_norm and re.fullmatch(r"\d{7}", cod_norm):
+            name_to_code[nome_norm] = cod_norm
+            code_to_name[cod_norm] = str(nome).strip().title()
+            if uf_norm and re.fullmatch(r"^[A-Z]{2}$", uf_norm):
+                code_to_uf[cod_norm] = uf_norm
+                name_to_uf[nome_norm] = uf_norm
+
+    return name_to_code, code_to_name, code_to_uf, name_to_uf
+
+
+# ===================== Núcleo (impl) =====================
+
+def _processar_fornecedores_impl(
+    *,
     fornecedores_path: str,
     municipios_path: str,
     cidade_default: str,
     uf_default: str,
-    ibge_default: str,  # usado como fallback se não achar no municípios
+    ibge_default: str,
     cep_default: str,
     ddd_default: str,
+    modo: str,  # "cidade_para_codigo" | "codigo_para_cidade"
 ) -> str:
     """
-    Processa a planilha fornecedores.xls/.xlsx conforme regras especificadas.
-    - codigo_cidade: compara cidade (planilha) com coluna D do municipios.* e retorna código da coluna B.
-    - aceita municipios.* em CSV ou Excel.
-    Retorna caminho do arquivo de saída (fornecedores_corrigido.xlsx).
+    Implementação interna com 'modo':
+      - "cidade_para_codigo": preenche IBGE a partir da cidade (original)
+      - "codigo_para_cidade": se cidade vazia e código presente, preenche cidade a partir do IBGE
     """
     df = _read_excel_any(fornecedores_path)
     colmap, created_cols = _best_guess_columns(df)
 
-    mun_map = _load_municipios_any(municipios_path)
+    name_to_code, code_to_name, code_to_uf, name_to_uf = _load_municipios_auto(municipios_path)
+
 
     uf_default = (uf_default or "").strip().upper()
     cidade_default_norm = _normalize_city_for_match(cidade_default or "")
@@ -345,16 +380,27 @@ def processar_fornecedores(
         val_doc = df.at[idx, colmap["cpf_cnpj"]]
         if pd.notna(val_doc) and str(val_doc).strip() != "":
             new_doc = _smart_cpf_cnpj_mask(val_doc)
-            if new_doc:
-                df.at[idx, colmap["cpf_cnpj"]] = new_doc
+            df.at[idx, colmap["cpf_cnpj"]] = new_doc or ""
         else:
-            df.at[idx, colmap["cpf_cnpj"]] = ""  # garante string vazia
+            df.at[idx, colmap["cpf_cnpj"]] = ""
 
-        # UF
+        # UF (prioridade: pelo código -> pelo nome -> default)
         val_uf = df.at[idx, colmap["uf"]]
         if pd.isna(val_uf) or str(val_uf).strip() == "":
-            if uf_default:
+            filled = False
+            cur_code = _only_digits(df.at[idx, colmap["codigo_cidade"]])
+            if cur_code and cur_code in code_to_uf:
+                df.at[idx, colmap["uf"]] = code_to_uf[cur_code]
+                filled = True
+            if not filled:
+                cidade_cell = df.at[idx, colmap["cidade"]]
+                uf_by_name = name_to_uf.get(_normalize_city_for_match(cidade_cell), "")
+                if uf_by_name:
+                    df.at[idx, colmap["uf"]] = uf_by_name
+                    filled = True
+            if not filled and uf_default:
                 df.at[idx, colmap["uf"]] = uf_default
+
 
         # CEP
         val_cep = df.at[idx, colmap["cep"]]
@@ -363,27 +409,52 @@ def processar_fornecedores(
         else:
             df.at[idx, colmap["cep"]] = _smart_cep_mask(str(val_cep), cep_default_masked)
 
-        # Cidade
-        val_cid = df.at[idx, colmap["cidade"]]
-        if pd.isna(val_cid) or str(val_cid).strip() == "":
-            if cidade_default_norm:
-                df.at[idx, colmap["cidade"]] = cidade_default_norm.title()
-        else:
-            fixed_city = _fix_mojibake_pt(str(val_cid))
-            df.at[idx, colmap["cidade"]] = fixed_city
-
-        # Código da cidade (IBGE)
+        # ----- CIDADE / IBGE conforme modo -----
+        val_cid    = df.at[idx, colmap["cidade"]]
         val_codcid = df.at[idx, colmap["codigo_cidade"]]
-        if pd.isna(val_codcid) or str(val_codcid).strip() == "":
-            cidade_cell = df.at[idx, colmap["cidade"]]
-            key = _normalize_city(str(cidade_cell))
-            ibge_code = mun_map.get(key, "")
-            if not ibge_code and ibge_default:
-                ibge_code = ibge_default
-            if ibge_code:
-                df.at[idx, colmap["codigo_cidade"]] = ibge_code
 
-                # NOVO: extrair número do endereço se 'numero' estiver vazio (antes da sanitização de textos)
+        if modo == "codigo_para_cidade":
+            # 1) Se cidade vazia, tenta pelo código IBGE
+            if pd.isna(val_cid) or str(val_cid).strip() == "":
+                cod_norm = _only_digits(val_codcid) if pd.notna(val_codcid) else ""
+                if cod_norm and cod_norm in code_to_name:
+                    df.at[idx, colmap["cidade"]] = code_to_name[cod_norm]
+                elif cidade_default_norm:
+                    df.at[idx, colmap["cidade"]] = cidade_default_norm.title()
+
+            # 2) Garante código, se ainda vazio, a partir da cidade
+            val_codcid = df.at[idx, colmap["codigo_cidade"]]
+            if pd.isna(val_codcid) or str(val_codcid).strip() == "":
+                cidade_cell = df.at[idx, colmap["cidade"]]
+                key = _normalize_city_for_match(cidade_cell)
+                ibge_code = name_to_code.get(key, "")
+                if not ibge_code and ibge_default:
+                    ibge_code = ibge_default
+                if ibge_code:
+                    df.at[idx, colmap["codigo_cidade"]] = ibge_code
+
+        else:  # "cidade_para_codigo" (padrão)
+            # 1) Se cidade vazia, usa default (se houver)
+            if pd.isna(val_cid) or str(val_cid).strip() == "":
+                if cidade_default_norm:
+                    df.at[idx, colmap["cidade"]] = cidade_default_norm.title()
+            else:
+                # Corrige mojibake visível
+                fixed_city = _fix_mojibake_pt(str(val_cid))
+                df.at[idx, colmap["cidade"]] = fixed_city
+
+            # 2) Código a partir da cidade
+            val_codcid = df.at[idx, colmap["codigo_cidade"]]
+            if pd.isna(val_codcid) or str(val_codcid).strip() == "":
+                cidade_cell = df.at[idx, colmap["cidade"]]
+                key = _normalize_city_for_match(cidade_cell)
+                ibge_code = name_to_code.get(key, "")
+                if not ibge_code and ibge_default:
+                    ibge_code = ibge_default
+                if ibge_code:
+                    df.at[idx, colmap["codigo_cidade"]] = ibge_code
+
+        # Número do endereço
         col_num = colmap["numero"]
         col_ender = colmap["endereco"]
         val_num = df.at[idx, col_num]
@@ -391,12 +462,9 @@ def processar_fornecedores(
             val_end = df.at[idx, col_ender]
             num_extraido = _extract_num_from_endereco(val_end if pd.notna(val_end) else "")
             if num_extraido:
-                # Preenche a Coluna M
                 df.at[idx, col_num] = num_extraido
-                # Remove o número ou SN do endereço (Coluna K)
                 novo_end = re.sub(r"(\d+|S[\/\s]*N)\s*$", "", str(val_end).upper(), flags=re.IGNORECASE)
                 df.at[idx, col_ender] = novo_end.strip()
-
 
         # Texto: nome, fantasia, endereco, bairro, contato
         for key in ["nome", "fantasia", "endereco", "bairro", "contato"]:
@@ -411,7 +479,7 @@ def processar_fornecedores(
         if pd.notna(val) and str(val).strip() != "":
             df.at[idx, col] = _smart_phone_mask(str(val), ddd_default)
         else:
-            df.at[idx, col] = ""  # garante string vazia
+            df.at[idx, col] = ""
 
     # Saída
     base_dir = os.path.dirname(os.path.abspath(fornecedores_path))
@@ -424,3 +492,77 @@ def processar_fornecedores(
         pd.DataFrame({"colunas_criadas": created_cols}).to_csv(out_log, index=False, encoding="utf-8")
 
     return out_xlsx
+
+# ===================== API pública =====================
+
+def processar_fornecedores_por_cidade(
+    *,
+    fornecedores_path: str,
+    municipios_path: str,
+    cidade_default: str,
+    uf_default: str,
+    ibge_default: str,
+    cep_default: str,
+    ddd_default: str,
+) -> str:
+    """
+    Modo 'Cidade → IBGE' (comportamento original).
+    """
+    return _processar_fornecedores_impl(
+        fornecedores_path=fornecedores_path,
+        municipios_path=municipios_path,
+        cidade_default=cidade_default,
+        uf_default=uf_default,
+        ibge_default=ibge_default,
+        cep_default=cep_default,
+        ddd_default=ddd_default,
+        modo="cidade_para_codigo",
+    )
+
+def processar_fornecedores_por_codigo(
+    *,
+    fornecedores_path: str,
+    municipios_path: str,
+    cidade_default: str,
+    uf_default: str,
+    ibge_default: str,
+    cep_default: str,
+    ddd_default: str,
+) -> str:
+    """
+    Modo 'Código IBGE → Cidade' (se cidade estiver vazia e houver código).
+    """
+    return _processar_fornecedores_impl(
+        fornecedores_path=fornecedores_path,
+        municipios_path=municipios_path,
+        cidade_default=cidade_default,
+        uf_default=uf_default,
+        ibge_default=ibge_default,
+        cep_default=cep_default,
+        ddd_default=ddd_default,
+        modo="codigo_para_cidade",
+    )
+
+# Compatibilidade com o main.py atual
+def processar_fornecedores(
+    *,
+    fornecedores_path: str,
+    municipios_path: str,
+    cidade_default: str,
+    uf_default: str,
+    ibge_default: str,
+    cep_default: str,
+    ddd_default: str,
+) -> str:
+    """
+    Alias para o modo padrão (Cidade → IBGE).
+    """
+    return processar_fornecedores_por_cidade(
+        fornecedores_path=fornecedores_path,
+        municipios_path=municipios_path,
+        cidade_default=cidade_default,
+        uf_default=uf_default,
+        ibge_default=ibge_default,
+        cep_default=cep_default,
+        ddd_default=ddd_default,
+    )
